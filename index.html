@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cyberpunk Hand-Tracked Particles</title>
+
+  <!-- CDN Imports -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Noto+Sans+SC:wght@700&display=swap" rel="stylesheet">
+
+  <style>
+    /* ==================== CYBERPUNK CSS STYLES ==================== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Orbitron', monospace;
+      color: #00FFFF;
+    }
+
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #threeCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+
+    #webcam {
+      display: none;
+    }
+
+    /* HUD Corners */
+    .hud {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid #00FFFF;
+      padding: 10px 15px;
+      font-size: 14px;
+      z-index: 10;
+      text-shadow: 0 0 5px #00FFFF;
+      font-family: 'Orbitron', monospace;
+      letter-spacing: 1px;
+    }
+
+    #hud-tl { top: 20px; left: 20px; }
+    #hud-tr { top: 20px; right: 20px; }
+    #hud-bl { bottom: 20px; left: 20px; }
+    #hud-br { bottom: 20px; right: 20px; }
+
+    .hud span {
+      color: #00FF88;
+      font-weight: bold;
+    }
+
+    /* Loading Screen */
+    #loading {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      color: #00FFFF;
+      font-size: 20px;
+      text-shadow: 0 0 10px #00FFFF;
+    }
+
+    #loading.hidden {
+      display: none;
+    }
+
+    .spinner {
+      border: 3px solid rgba(0, 255, 255, 0.3);
+      border-top: 3px solid #00FFFF;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      animation: spin 1s linear infinite;
+      margin-bottom: 20px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <canvas id="threeCanvas"></canvas>
+    <video id="webcam"></video>
+
+    <!-- HUD Elements -->
+    <div id="hud-tl" class="hud">FPS: <span id="fps">60</span></div>
+    <div id="hud-tr" class="hud">PARTICLES: <span id="particle-count">12000</span></div>
+    <div id="hud-bl" class="hud">
+      LEFT: <span id="left-status">-</span><br>
+      RIGHT: <span id="right-status">-</span>
+    </div>
+    <div id="hud-br" class="hud">MODE: <span id="mode">IDLE</span></div>
+
+    <!-- Loading Screen -->
+    <div id="loading">
+      <div class="spinner"></div>
+      <div>INITIALIZING CYBERPUNK SYSTEM...</div>
+    </div>
+  </div>
+
+  <script>
+    /* ==================== CONFIGURATION & CONSTANTS ==================== */
+    const CONFIG = {
+      particles: {
+        count: 12000,
+        size: 2.4,
+        returnSpeed: 0.16,
+        repulsionStrength: 150,
+        repulsionRadius: 200,
+        nebulaStrength: 80,
+        nebulaRadius: 400,
+        attractionStrength: 5.0,
+        basketballAttractionStrength: 8.0,
+        velocityDamping: 0.92
+      },
+      colors: {
+        background: 0x000000,
+        neonBlue: 0x00FFFF,
+        neonYellow: 0xFFFF00,
+        neonPink: 0xFF00FF,
+        neonGreen: 0x00FF88,
+        orange: 0xFF8800,
+        black: 0x000000,
+        cyan: 0x00FFFF
+      },
+      text: {
+        1: { text: "Hello", color: 0x00FFFF },
+        2: { text: "Gemini3", color: 0xFFFF00 },
+        3: { text: "非常好用", color: 0xFF00FF },
+        4: { text: "再见", color: 0x00FF88 }
+      },
+      basketball: {
+        radius: 100,
+        rotationSpeed: 0.02,
+        bounceAmplitude: 20,
+        bounceFrequency: 5.0
+      },
+      camera: {
+        width: 1280,
+        height: 720,
+        fov: 75
+      }
+    };
+
+    /* ==================== STATE MANAGEMENT ==================== */
+    const MODES = {
+      IDLE: 'IDLE',
+      TEXT_1: 'TEXT_1',
+      TEXT_2: 'TEXT_2',
+      TEXT_3: 'TEXT_3',
+      TEXT_4: 'TEXT_4',
+      CATCH: 'CATCH',
+      SCATTER: 'SCATTER',
+      NEBULA: 'NEBULA',
+      BASKETBALL: 'BASKETBALL'
+    };
+
+    const STATE = {
+      currentMode: MODES.IDLE,
+      previousMode: MODES.IDLE,
+
+      leftHand: {
+        detected: false,
+        fingerCount: 0,
+        landmarks: null,
+        palmCenter: null,
+        stableCount: 0,
+        lastRawCount: 0
+      },
+
+      rightHand: {
+        detected: false,
+        fingerCount: 0,
+        landmarks: null,
+        indexTip: null,
+        stableCount: 0,
+        lastRawCount: 0
+      },
+
+      transition: {
+        active: false,
+        progress: 1.0,
+        duration: 0.5,
+        startTime: 0
+      },
+
+      basketball: {
+        active: false,
+        rotationAngle: 0,
+        positions: [],
+        phase: 'idle'
+      },
+
+      performance: {
+        fps: 60,
+        frameCount: 0,
+        lastTime: performance.now(),
+        frameTimes: []
+      }
+    };
+
+    /* ==================== GLOBAL VARIABLES ==================== */
+    let scene, camera, renderer, particleSystem;
+    let hands, cameraUtils;
+    let time = 0;
+    let lastFrameTime = performance.now();
+    let coordCache = {};
+
+    /* ==================== PARTICLE SYSTEM CLASS ==================== */
+    class ParticleSystem {
+      constructor(count) {
+        this.count = count;
+
+        // Core position data
+        this.positions = new Float32Array(count * 3);
+        this.homePositions = new Float32Array(count * 3);
+        this.velocities = new Float32Array(count * 3);
+        this.forces = new Float32Array(count * 3);
+
+        // Visual attributes
+        this.colors = new Float32Array(count * 3);
+        this.sizes = new Float32Array(count);
+        this.isActive = new Uint8Array(count);
+
+        // Three.js geometry
+        this.geometry = new THREE.BufferGeometry();
+        this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+        this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+        this.geometry.setAttribute('size', new THREE.BufferAttribute(this.sizes, 1));
+
+        // Custom shader material with AdditiveBlending
+        this.material = new THREE.ShaderMaterial({
+          uniforms: {
+            pointTexture: { value: this.createGlowTexture() }
+          },
+          vertexShader: `
+            attribute float size;
+            attribute vec3 color;
+            varying vec3 vColor;
+
+            void main() {
+              vColor = color;
+              vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+              gl_PointSize = size * (300.0 / -mvPosition.z);
+              gl_Position = projectionMatrix * mvPosition;
+            }
+          `,
+          fragmentShader: `
+            uniform sampler2D pointTexture;
+            varying vec3 vColor;
+
+            void main() {
+              vec4 texColor = texture2D(pointTexture, gl_PointCoord);
+              gl_FragColor = vec4(vColor, 1.0) * texColor;
+            }
+          `,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          transparent: true
+        });
+
+        this.points = new THREE.Points(this.geometry, this.material);
+
+        // Initialize particles in grid
+        this.initializeGrid();
+      }
+
+      createGlowTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+
+        const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gradient.addColorStop(0, 'rgba(255,255,255,1)');
+        gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
+        gradient.addColorStop(0.5, 'rgba(255,255,255,0.3)');
+        gradient.addColorStop(1, 'rgba(255,255,255,0)');
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 64, 64);
+
+        return new THREE.CanvasTexture(canvas);
+      }
+
+      initializeGrid() {
+        const gridSize = Math.ceil(Math.sqrt(this.count));
+        const spacing = 15;
+        const offsetX = -(gridSize * spacing) / 2;
+        const offsetY = -(gridSize * spacing) / 2;
+
+        for (let i = 0; i < this.count; i++) {
+          const x = (i % gridSize) * spacing + offsetX;
+          const y = Math.floor(i / gridSize) * spacing + offsetY;
+          const z = (Math.random() - 0.5) * 5;
+
+          const idx = i * 3;
+          this.positions[idx] = this.homePositions[idx] = x;
+          this.positions[idx + 1] = this.homePositions[idx + 1] = y;
+          this.positions[idx + 2] = this.homePositions[idx + 2] = z;
+
+          // Initial color: cyan
+          this.colors[idx] = 0;
+          this.colors[idx + 1] = 1.0;
+          this.colors[idx + 2] = 1.0;
+
+          this.sizes[i] = CONFIG.particles.size;
+          this.isActive[i] = 1;
+
+          this.velocities[idx] = 0;
+          this.velocities[idx + 1] = 0;
+          this.velocities[idx + 2] = 0;
+        }
+
+        this.geometry.attributes.position.needsUpdate = true;
+        this.geometry.attributes.color.needsUpdate = true;
+      }
+
+      update(deltaTime) {
+        for (let i = 0; i < this.count; i++) {
+          if (!this.isActive[i]) continue;
+
+          const idx = i * 3;
+
+          // Apply forces to velocity
+          this.velocities[idx] += this.forces[idx];
+          this.velocities[idx + 1] += this.forces[idx + 1];
+          this.velocities[idx + 2] += this.forces[idx + 2];
+
+          // Apply velocity to position
+          this.positions[idx] += this.velocities[idx] * deltaTime;
+          this.positions[idx + 1] += this.velocities[idx + 1] * deltaTime;
+          this.positions[idx + 2] += this.velocities[idx + 2] * deltaTime;
+
+          // Lerp toward home position
+          const dx = this.homePositions[idx] - this.positions[idx];
+          const dy = this.homePositions[idx + 1] - this.positions[idx + 1];
+          const dz = this.homePositions[idx + 2] - this.positions[idx + 2];
+
+          this.positions[idx] += dx * CONFIG.particles.returnSpeed;
+          this.positions[idx + 1] += dy * CONFIG.particles.returnSpeed;
+          this.positions[idx + 2] += dz * CONFIG.particles.returnSpeed;
+
+          // Apply damping
+          this.velocities[idx] *= CONFIG.particles.velocityDamping;
+          this.velocities[idx + 1] *= CONFIG.particles.velocityDamping;
+          this.velocities[idx + 2] *= CONFIG.particles.velocityDamping;
+
+          // Reset forces
+          this.forces[idx] = 0;
+          this.forces[idx + 1] = 0;
+          this.forces[idx + 2] = 0;
+        }
+
+        this.geometry.attributes.position.needsUpdate = true;
+      }
+
+      setHomePositions(coordinates, color) {
+        const coordCount = Math.min(coordinates.length, this.count);
+
+        for (let i = 0; i < coordCount; i++) {
+          const idx = i * 3;
+          this.homePositions[idx] = coordinates[i].x;
+          this.homePositions[idx + 1] = coordinates[i].y;
+          this.homePositions[idx + 2] = 0;
+          this.isActive[i] = 1;
+
+          // Set color
+          const r = ((color >> 16) & 255) / 255;
+          const g = ((color >> 8) & 255) / 255;
+          const b = (color & 255) / 255;
+
+          this.colors[idx] = r;
+          this.colors[idx + 1] = g;
+          this.colors[idx + 2] = b;
+        }
+
+        // Deactivate unused particles
+        for (let i = coordCount; i < this.count; i++) {
+          this.isActive[i] = 0;
+        }
+
+        this.geometry.attributes.color.needsUpdate = true;
+      }
+    }
+
+    /* ==================== THREE.JS SETUP ==================== */
+    function initThreeJS() {
+      // Scene
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(CONFIG.colors.background);
+
+      // Camera (orthographic for better 2D control)
+      const aspect = window.innerWidth / window.innerHeight;
+      const frustumSize = 500;
+      camera = new THREE.OrthographicCamera(
+        frustumSize * aspect / -2,
+        frustumSize * aspect / 2,
+        frustumSize / 2,
+        frustumSize / -2,
+        1,
+        2000
+      );
+      camera.position.z = 500;
+
+      // Renderer
+      renderer = new THREE.WebGLRenderer({
+        canvas: document.getElementById('threeCanvas'),
+        antialias: true
+      });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+
+      // Particle system
+      particleSystem = new ParticleSystem(CONFIG.particles.count);
+      scene.add(particleSystem.points);
+
+      // Window resize handler
+      window.addEventListener('resize', onWindowResize);
+
+      console.log('Three.js initialized with', CONFIG.particles.count, 'particles');
+    }
+
+    function onWindowResize() {
+      const aspect = window.innerWidth / window.innerHeight;
+      const frustumSize = 500;
+
+      camera.left = frustumSize * aspect / -2;
+      camera.right = frustumSize * aspect / 2;
+      camera.top = frustumSize / 2;
+      camera.bottom = frustumSize / -2;
+      camera.updateProjectionMatrix();
+
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    /* ==================== MEDIAPIPE HAND TRACKING ==================== */
+    async function initMediaPipe() {
+      console.log('Initializing MediaPipe Hands...');
+
+      // Initialize Hands
+      hands = new Hands({
+        locateFile: (file) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }
+      });
+
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+      });
+
+      hands.onResults(onHandsDetected);
+
+      // Initialize camera
+      const videoElement = document.getElementById('webcam');
+      const cameraInstance = new Camera(videoElement, {
+        onFrame: async () => {
+          await hands.send({ image: videoElement });
+        },
+        width: CONFIG.camera.width,
+        height: CONFIG.camera.height
+      });
+
+      await cameraInstance.start();
+      console.log('MediaPipe Hands initialized');
+    }
+
+    function onHandsDetected(results) {
+      // Reset hand states
+      STATE.leftHand.detected = false;
+      STATE.rightHand.detected = false;
+
+      if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+        return;
+      }
+
+      // Process each detected hand
+      for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+        const landmarks = results.multiHandLandmarks[i];
+        const handedness = results.multiHandedness[i].label;
+
+        // Count fingers with hysteresis
+        const rawFingerCount = countFingers(landmarks, handedness);
+        const stableFingerCount = getStableFingerCount(
+          rawFingerCount,
+          handedness === 'Left' ? STATE.leftHand : STATE.rightHand
+        );
+
+        // Transform landmarks to world space
+        const transformedLandmarks = transformLandmarksToWorldSpace(landmarks);
+
+        if (handedness === 'Left') {
+          STATE.leftHand.detected = true;
+          STATE.leftHand.fingerCount = stableFingerCount;
+          STATE.leftHand.landmarks = transformedLandmarks;
+          STATE.leftHand.palmCenter = getPalmCenter(transformedLandmarks);
+        } else {
+          STATE.rightHand.detected = true;
+          STATE.rightHand.fingerCount = stableFingerCount;
+          STATE.rightHand.landmarks = transformedLandmarks;
+          STATE.rightHand.indexTip = transformedLandmarks[8];
+        }
+      }
+    }
+
+    function countFingers(landmarks, handedness) {
+      let count = 0;
+
+      // Calculate palm normal for more robust detection
+      const palmNormal = calculatePalmNormal(landmarks);
+
+      // Thumb (special case - horizontal extension)
+      const thumbTip = landmarks[4];
+      const thumbIP = landmarks[3];
+      const thumbMCP = landmarks[2];
+
+      const thumbVector = {
+        x: thumbTip.x - thumbMCP.x,
+        y: thumbTip.y - thumbMCP.y,
+        z: thumbTip.z - thumbMCP.z
+      };
+
+      const thumbAlignment = Math.abs(dotProduct(thumbVector, palmNormal));
+      if (thumbAlignment > 0.3) {
+        count++;
+      }
+
+      // Other four fingers (vertical extension)
+      const fingerTips = [8, 12, 16, 20];
+      const fingerPIPs = [6, 10, 14, 18];
+
+      for (let i = 0; i < 4; i++) {
+        const tip = landmarks[fingerTips[i]];
+        const pip = landmarks[fingerPIPs[i]];
+
+        const fingerVector = {
+          x: tip.x - pip.x,
+          y: tip.y - pip.y,
+          z: tip.z - pip.z
+        };
+
+        const fingerAlignment = dotProduct(fingerVector, palmNormal);
+        if (fingerAlignment > 0.2) {
+          count++;
+        }
+      }
+
+      return count;
+    }
+
+    function calculatePalmNormal(landmarks) {
+      const wrist = landmarks[0];
+      const indexMCP = landmarks[5];
+      const pinkyMCP = landmarks[17];
+
+      const v1 = {
+        x: indexMCP.x - wrist.x,
+        y: indexMCP.y - wrist.y,
+        z: indexMCP.z - wrist.z
+      };
+
+      const v2 = {
+        x: pinkyMCP.x - wrist.x,
+        y: pinkyMCP.y - wrist.y,
+        z: pinkyMCP.z - wrist.z
+      };
+
+      return crossProduct(v1, v2);
+    }
+
+    function dotProduct(v1, v2) {
+      return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+    }
+
+    function crossProduct(v1, v2) {
+      return {
+        x: v1.y * v2.z - v1.z * v2.y,
+        y: v1.z * v2.x - v1.x * v2.z,
+        z: v1.x * v2.y - v1.y * v2.x
+      };
+    }
+
+    function normalize(v) {
+      const mag = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+      return mag > 0 ? { x: v.x / mag, y: v.y / mag, z: v.z / mag } : v;
+    }
+
+    function getStableFingerCount(rawCount, handState) {
+      const STABILITY_THRESHOLD = 5;
+
+      if (rawCount === handState.lastRawCount) {
+        handState.stableCount++;
+      } else {
+        handState.stableCount = 0;
+        handState.lastRawCount = rawCount;
+      }
+
+      if (handState.stableCount >= STABILITY_THRESHOLD) {
+        return rawCount;
+      }
+
+      return handState.fingerCount;
+    }
+
+    function transformLandmarksToWorldSpace(landmarks) {
+      const transformed = [];
+
+      for (let i = 0; i < landmarks.length; i++) {
+        const lm = landmarks[i];
+
+        // Convert from [0,1] to [-1,1] NDC, mirror X for natural interaction
+        const ndcX = -(lm.x * 2 - 1);
+        const ndcY = -(lm.y * 2 - 1);
+
+        // Unproject to world space
+        const vector = new THREE.Vector3(ndcX, ndcY, 0.5);
+        vector.unproject(camera);
+
+        const dir = vector.sub(camera.position).normalize();
+        const distance = -camera.position.z / dir.z;
+        const worldPos = camera.position.clone().add(dir.multiplyScalar(distance));
+
+        transformed.push({
+          x: worldPos.x,
+          y: worldPos.y,
+          z: 0,
+          original: lm
+        });
+      }
+
+      return transformed;
+    }
+
+    function getPalmCenter(landmarks) {
+      const wrist = landmarks[0];
+      const indexMCP = landmarks[5];
+      const pinkyMCP = landmarks[17];
+
+      return {
+        x: (wrist.x + indexMCP.x + pinkyMCP.x) / 3,
+        y: (wrist.y + indexMCP.y + pinkyMCP.y) / 3,
+        z: (wrist.z + indexMCP.z + pinkyMCP.z) / 3
+      };
+    }
+
+    /* ==================== TEXT-TO-PARTICLES CONVERTER ==================== */
+    function textToCoordinates(text) {
+      // Check cache first
+      if (coordCache[text]) {
+        return coordCache[text];
+      }
+
+      // Create hidden canvas for text rasterization
+      const canvas = document.createElement('canvas');
+      canvas.width = 1200;
+      canvas.height = 400;
+      const ctx = canvas.getContext('2d');
+
+      // Clear canvas
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw text in white
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 75px "Noto Sans SC", Orbitron, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+      // Get pixel data
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data;
+
+      // Extract white pixel coordinates
+      const coordinates = [];
+      const samplingRate = 2;
+
+      for (let y = 0; y < canvas.height; y += samplingRate) {
+        for (let x = 0; x < canvas.width; x += samplingRate) {
+          const idx = (y * canvas.width + x) * 4;
+          const r = pixels[idx];
+
+          // If pixel is white (text)
+          if (r > 128) {
+            coordinates.push({
+              x: x - canvas.width / 2,
+              y: -(y - canvas.height / 2),
+              z: 0
+            });
+          }
+        }
+      }
+
+      // Shuffle coordinates for random distribution
+      shuffleArray(coordinates);
+
+      // Cache result
+      coordCache[text] = coordinates;
+
+      return coordinates;
+    }
+
+    function shuffleArray(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+    }
+
+    function transitionToText(fingerCount) {
+      const config = CONFIG.text[fingerCount];
+      if (!config) return;
+
+      const coordinates = textToCoordinates(config.text);
+      particleSystem.setHomePositions(coordinates, config.color);
+
+      console.log(`Transitioning to: ${config.text}`);
+    }
+
+    /* ==================== MODE MANAGEMENT ==================== */
+    function updateMode() {
+      const prevMode = STATE.currentMode;
+
+      // Priority 1: Basketball mode (both hands 5 fingers)
+      if (STATE.leftHand.detected && STATE.rightHand.detected &&
+          STATE.leftHand.fingerCount === 5 && STATE.rightHand.fingerCount === 5) {
+        STATE.currentMode = MODES.BASKETBALL;
+      }
+      // Priority 2: Left hand text modes (1-4 fingers)
+      else if (STATE.leftHand.detected && STATE.leftHand.fingerCount >= 1 &&
+               STATE.leftHand.fingerCount <= 4) {
+        STATE.currentMode = MODES[`TEXT_${STATE.leftHand.fingerCount}`];
+      }
+      // Priority 3: Left hand catch mode (5 fingers)
+      else if (STATE.leftHand.detected && STATE.leftHand.fingerCount === 5) {
+        STATE.currentMode = MODES.CATCH;
+      }
+      // Priority 4: Right hand nebula mode (5 fingers)
+      else if (STATE.rightHand.detected && STATE.rightHand.fingerCount === 5) {
+        STATE.currentMode = MODES.NEBULA;
+      }
+      // Priority 5: Right hand scatter mode (1-4 fingers)
+      else if (STATE.rightHand.detected) {
+        STATE.currentMode = MODES.SCATTER;
+      }
+      // Priority 6: Idle
+      else {
+        STATE.currentMode = MODES.IDLE;
+      }
+
+      // Handle mode transitions
+      if (prevMode !== STATE.currentMode) {
+        onModeChange(prevMode, STATE.currentMode);
+      }
+    }
+
+    function onModeChange(prevMode, newMode) {
+      console.log(`Mode change: ${prevMode} → ${newMode}`);
+
+      // Handle text mode transitions
+      if (newMode === MODES.TEXT_1) {
+        transitionToText(1);
+      } else if (newMode === MODES.TEXT_2) {
+        transitionToText(2);
+      } else if (newMode === MODES.TEXT_3) {
+        transitionToText(3);
+      } else if (newMode === MODES.TEXT_4) {
+        transitionToText(4);
+      }
+
+      // Basketball mode initialization
+      if (newMode === MODES.BASKETBALL && prevMode !== MODES.BASKETBALL) {
+        STATE.basketball.active = true;
+        STATE.basketball.phase = 'gathering';
+      }
+
+      // Exit basketball mode
+      if (prevMode === MODES.BASKETBALL && newMode !== MODES.BASKETBALL) {
+        STATE.basketball.active = false;
+        STATE.basketball.phase = 'idle';
+      }
+    }
+
+    /* ==================== PHYSICS ENGINE ==================== */
+    function applyScatterMode() {
+      if (!STATE.rightHand.detected || !STATE.rightHand.indexTip) return;
+
+      const indexTip = STATE.rightHand.indexTip;
+      const repulsionRadius = CONFIG.particles.repulsionRadius;
+      const repulsionStrength = CONFIG.particles.repulsionStrength;
+
+      for (let i = 0; i < particleSystem.count; i++) {
+        if (!particleSystem.isActive[i]) continue;
+
+        const idx = i * 3;
+        const px = particleSystem.positions[idx];
+        const py = particleSystem.positions[idx + 1];
+
+        // Calculate XY distance only (planar repulsion, NO Z component)
+        const dx = px - indexTip.x;
+        const dy = py - indexTip.y;
+        const distXY = Math.sqrt(dx * dx + dy * dy);
+
+        if (distXY < repulsionRadius && distXY > 0.1) {
+          // Normalize XY direction
+          const dirX = dx / distXY;
+          const dirY = dy / distXY;
+
+          // Inverse square falloff
+          const force = repulsionStrength / (distXY * distXY);
+
+          // Apply force ONLY in XY plane (no Z component)
+          particleSystem.forces[idx] += dirX * force;
+          particleSystem.forces[idx + 1] += dirY * force;
+          // particleSystem.forces[idx + 2] remains 0 (no Z bulge)
+        }
+      }
+    }
+
+    function applyNebulaMode() {
+      if (!STATE.rightHand.detected || !STATE.rightHand.landmarks) return;
+
+      const indexTip = STATE.rightHand.landmarks[8];
+      const middleTip = STATE.rightHand.landmarks[12];
+
+      // Hand center between index and middle finger
+      const handCenter = {
+        x: (indexTip.x + middleTip.x) / 2,
+        y: (indexTip.y + middleTip.y) / 2,
+        z: (indexTip.z + middleTip.z) / 2
+      };
+
+      const nebulaRadius = CONFIG.particles.nebulaRadius;
+      const scatterStrength = CONFIG.particles.nebulaStrength;
+      const waveAmplitude = 30;
+      const waveFrequency = 3.0;
+      const waveSpeed = 2.0;
+
+      for (let i = 0; i < particleSystem.count; i++) {
+        if (!particleSystem.isActive[i]) continue;
+
+        const idx = i * 3;
+        const px = particleSystem.positions[idx];
+        const py = particleSystem.positions[idx + 1];
+        const pz = particleSystem.positions[idx + 2];
+
+        // Calculate 3D distance
+        const dx = px - handCenter.x;
+        const dy = py - handCenter.y;
+        const dz = pz - handCenter.z;
+        const dist3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        if (dist3D < nebulaRadius && dist3D > 0.1) {
+          // Normalize 3D direction
+          const dirX = dx / dist3D;
+          const dirY = dy / dist3D;
+          const dirZ = dz / dist3D;
+
+          // 3D scatter force (push outward)
+          const scatterForce = scatterStrength / (1 + dist3D * 0.1);
+          particleSystem.forces[idx] += dirX * scatterForce;
+          particleSystem.forces[idx + 1] += dirY * scatterForce;
+          particleSystem.forces[idx + 2] += dirZ * scatterForce;
+
+          // Water ripple sine wave (radial propagation)
+          const distXY = Math.sqrt(dx * dx + dy * dy);
+          const wavePhase = distXY * waveFrequency - time * waveSpeed;
+          const waveForce = Math.sin(wavePhase) * waveAmplitude;
+
+          // Apply wave force perpendicular to radial direction (tangential)
+          if (distXY > 0.1) {
+            const tangentX = -dy / distXY;
+            const tangentY = dx / distXY;
+
+            particleSystem.forces[idx] += tangentX * waveForce * 0.5;
+            particleSystem.forces[idx + 1] += tangentY * waveForce * 0.5;
+          }
+
+          // Also apply vertical wave component
+          particleSystem.forces[idx + 2] += Math.cos(wavePhase) * waveAmplitude * 0.3;
+        }
+      }
+    }
+
+    function applyCatchMode() {
+      if (!STATE.leftHand.detected || !STATE.leftHand.palmCenter) return;
+
+      const palmCenter = STATE.leftHand.palmCenter;
+      const attractionStrength = CONFIG.particles.attractionStrength;
+
+      for (let i = 0; i < particleSystem.count; i++) {
+        if (!particleSystem.isActive[i]) continue;
+
+        const idx = i * 3;
+        const px = particleSystem.positions[idx];
+        const py = particleSystem.positions[idx + 1];
+        const pz = particleSystem.positions[idx + 2];
+
+        // Direction toward palm
+        const dx = palmCenter.x - px;
+        const dy = palmCenter.y - py;
+        const dz = palmCenter.z - pz;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        if (dist > 1.0) {
+          // Normalize direction
+          const dirX = dx / dist;
+          const dirY = dy / dist;
+          const dirZ = dz / dist;
+
+          // Linear attraction
+          const force = attractionStrength;
+
+          particleSystem.forces[idx] += dirX * force;
+          particleSystem.forces[idx + 1] += dirY * force;
+          particleSystem.forces[idx + 2] += dirZ * force;
+        }
+      }
+    }
+
+    function applyPhysics() {
+      // Apply physics based on current mode
+      switch (STATE.currentMode) {
+        case MODES.SCATTER:
+          applyScatterMode();
+          break;
+        case MODES.NEBULA:
+          applyNebulaMode();
+          break;
+        case MODES.CATCH:
+          applyCatchMode();
+          break;
+        case MODES.BASKETBALL:
+          applyBasketballMode();
+          break;
+      }
+    }
+
+    /* ==================== ANIMATION LOOP ==================== */
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const currentTime = performance.now();
+      const deltaTime = Math.min((currentTime - lastFrameTime) / 1000, 0.033);
+      lastFrameTime = currentTime;
+      time = currentTime / 1000;
+
+      // Update mode based on hand states
+      updateMode();
+
+      // Apply physics forces based on mode
+      applyPhysics();
+
+      // Update FPS
+      updateFPS();
+
+      // Update particle system
+      particleSystem.update(deltaTime);
+
+      // Render
+      renderer.render(scene, camera);
+    }
+
+    /* ==================== HUD UPDATES ==================== */
+    function updateFPS() {
+      STATE.performance.frameCount++;
+      const currentTime = performance.now();
+      const elapsed = currentTime - STATE.performance.lastTime;
+
+      if (elapsed >= 200) {
+        STATE.performance.fps = Math.round((STATE.performance.frameCount * 1000) / elapsed);
+        document.getElementById('fps').textContent = STATE.performance.fps;
+        STATE.performance.frameCount = 0;
+        STATE.performance.lastTime = currentTime;
+      }
+    }
+
+    function updateHUD() {
+      // Count active particles
+      let activeCount = 0;
+      for (let i = 0; i < particleSystem.count; i++) {
+        if (particleSystem.isActive[i]) activeCount++;
+      }
+      document.getElementById('particle-count').textContent = activeCount;
+
+      // Hand status
+      const leftStatus = STATE.leftHand.detected
+        ? `${STATE.leftHand.fingerCount} FINGERS`
+        : '-';
+      const rightStatus = STATE.rightHand.detected
+        ? `${STATE.rightHand.fingerCount} FINGERS`
+        : '-';
+
+      document.getElementById('left-status').textContent = leftStatus;
+      document.getElementById('right-status').textContent = rightStatus;
+
+      // Mode
+      document.getElementById('mode').textContent = STATE.currentMode;
+    }
+
+    /* ==================== INITIALIZATION ==================== */
+    async function init() {
+      console.log('Initializing Cyberpunk Particle System...');
+
+      try {
+        // Wait for fonts to load
+        await document.fonts.ready;
+        console.log('Fonts loaded');
+
+        // Initialize Three.js
+        initThreeJS();
+
+        // Initialize MediaPipe Hands
+        await initMediaPipe();
+
+        // Hide loading screen
+        setTimeout(() => {
+          document.getElementById('loading').classList.add('hidden');
+          console.log('System ready!');
+        }, 500);
+
+        // Start animation loop
+        animate();
+
+        // Update HUD periodically
+        setInterval(updateHUD, 100);
+
+      } catch (error) {
+        console.error('Initialization error:', error);
+        document.getElementById('loading').innerHTML =
+          '<div style="color: #FF0000;">ERROR: ' + error.message + '</div>';
+      }
+    }
+
+    // Start when page loads
+    window.addEventListener('load', init);
+  </script>
+</body>
+</html>
