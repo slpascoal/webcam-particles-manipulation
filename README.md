@@ -37,7 +37,7 @@ O visual é inspirado na estética **Hardcore Cyberpunk**, apresentando scanline
 
 O sistema diferencia a **Mão Esquerda** (Comandos de Conteúdo) da **Mão Direita** (Interação Física).
 
-### 🖐️ Mão Esquerda (Controlador de Formas)
+### 🖐️ Mão Direita (Controlador de Formas)
 
 A quantidade de dedos levantados altera o texto e a cor das partículas:
 
@@ -49,7 +49,7 @@ A quantidade de dedos levantados altera o texto e a cor das partículas:
 | **4 Dedos** | Texto: "再见" (Tchau) | 🟢 Verde |
 | **Palma Aberta** | **Catch Mode:** Prepara atração | --- |
 
-### ✋ Mão Direita (Interator Físico)
+### ✋ Mão Esquerda (Interator Físico)
 
 Controla a física e o comportamento do ambiente:
 
